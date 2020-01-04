@@ -94,9 +94,11 @@ class BertEncoder(BertModel):
 
     def forward(self, sents):
         # forwarding the sents and use the average embedding as the results
-        
+
         representation  = self.lm(sents) #.unsqueeze(0)) # num_sent * sent_len * emb
-        sent_representation = torch.mean(representation, dim=1) # num_sent * emb
+        # print(representation[0].size)
+        sent_representation = torch.mean(representation[0], dim=1) # num_sent * emb
+        # print(sent_representation.size)
         overall_representation = torch.mean(sent_representation, dim=0) # 1 *  emb
 
         return overall_representation
@@ -129,7 +131,7 @@ class DebateModel(torch.nn.Module):
         self.bert = BertEncoder.from_pretrained(config)
         # self.lstm = LSTMEncoder(300,300)
 
-        self.text_specific = torch.nn.Linear(768, 128)
+        self.text_specific = torch.nn.Linear(1024, 128)
         self.ling_specific = torch.nn.Linear(8, 5)
         self.cat_specific = torch.nn.Linear(len(USEFUL_CATS) * 10, 64) # 6 * 10
         self.task_specific = torch.nn.Linear(10, 5)
@@ -144,7 +146,7 @@ class DebateModel(torch.nn.Module):
     
     def init_per_task_last_layers(self, num_task):
         # we only cares about Pro/Con here
-        [torch.nn.Linear(self.hidden_dim + 5, len(TARGET_LABEL)) for i in range(num_task)]
+        return torch.nn.ModuleList([torch.nn.Linear(self.hidden_dim + 5, len(TARGET_LABEL)) for i in range(num_task)])
 
     def init_hidden(self):
         return (torch.zeros(1, 1, self.hidden_dim),
@@ -157,7 +159,7 @@ class DebateModel(torch.nn.Module):
         text_rep = self.bert(tokenized_sents)
         text_rep = self.text_specific(text_rep)
 
-        cls_rep = torch.cat([cat_rep, ling_rep, text_rep], dim=1)
+        cls_rep = torch.cat([cat_rep, ling_rep, text_rep])
         # two layers NN for the classification module
         cls_rep = self.classification(cls_rep)
         cls_rep = self.second_last_layer(cls_rep)
@@ -165,7 +167,9 @@ class DebateModel(torch.nn.Module):
         task_results = []
         for i,task_emb in enumerate(task_embs):
             task_rep = self.task_specific(task_emb)
-            combined_rep = torch.cat([cls_rep, task_rep])
+  
+            combined_rep = torch.cat([cls_rep, task_rep]).to(device)
+
             task_result = self.last_layers[i](combined_rep)
             task_results.append(task_result)
 
@@ -270,7 +274,11 @@ class DataLoader:
 
             # tokenized sentences for BERT
             tokenized_sents = []
-            for sent in text_sents:
+            for sent_num, sent in enumerate(text_sents):
+                if sent_num >= (args.max_sent_num - 1):
+                    # limit the number of senteneces
+                    break
+
                 token_sent = self.tokenizer.tokenize('[CLS] ' + sent)
                 if len(token_sent) > (self.args.max_len-1):
                     token_sent = token_sent[:self.args.max_len-1]
@@ -316,13 +324,13 @@ class DataLoader:
                     sim_seq.append(issue_sim[1])
                 # name of the main issue
                 data_by_issue[target[0][0]]["users"].append(
-                {'cat_one_hot':torch.tensor(cat_one_hot),
-                    'cat_emb': torch.tensor(cat_emb),
-                    'ling_vec':torch.tensor(linguistic_vector),
-                    'tokenized_sents': torch.tensor(tokenized_sents),
-                    'label_seq': torch.tensor(label_seq),
-                    'task_embs': torch.tensor(task_embs),
-                    'sim_seq': torch.tensor(sim_seq)
+                {'cat_one_hot':torch.tensor(cat_one_hot).to(device),
+                    'cat_emb': torch.tensor(cat_emb).to(device),
+                    'ling_vec':torch.tensor(linguistic_vector).to(device),
+                    'tokenized_sents': torch.tensor(tokenized_sents).to(device),
+                    'label_seq': torch.tensor(label_seq).to(device),
+                    'task_embs': torch.tensor(task_embs).to(device),
+                    'sim_seq': torch.tensor(sim_seq).to(device)
                     })
 
         return data_by_issue
@@ -360,7 +368,7 @@ class DataLoader:
         return seperated_data_collection
 
 
-def train(model, data, args):
+def train(model, data, args, loss_func, optimizer):
     all_loss = 0
     print('training:')
     random.shuffle(data)
@@ -377,22 +385,22 @@ def train(model, data, args):
         #     })
 
     for tmp in tqdm(selected_data):
-        
         task_results = model(cat_vec=tmp['cat_emb'].to(device), ling_vec=tmp['ling_vec'].to(device), tokenized_sents=tmp['tokenized_sents'].to(device), task_embs=tmp['task_embs'].to(device))
         for i, task_prediction in enumerate(task_results):
             # here we assigned the weighted sum
             if i == 0: # main task: 1 * loss
-                loss = loss_func(task_prediction, tmp['label_seq'][i])
+                loss = loss_func(task_prediction.view(1, -1), tmp['label_seq'][i].unsqueeze(0))
             else: # auxiliarys: sim * loss
-                loss += sim_seq[i] * loss_func(task_prediction, tmp['label_seq'][i])
-        test_optimizer.zero_grad()
+                loss += tmp["sim_seq"][i] * loss_func(task_prediction.view(1, -1), tmp['label_seq'][i].unsqueeze(0))
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         all_loss += loss.item()
+
     print('current loss:', all_loss / len(data))
 
 
-def test(model, data, args):
+def test(model, data, args, loss_func, optimizer):
     correct_count = 0
     ans_seq = []
     # print('Testing:')
@@ -403,14 +411,14 @@ def test(model, data, args):
 
         if tmp['label_seq'][0].data[0] == 1:
             # current example is positive
-            if main_prediction.data[0][1] >= main_prediction.data[0][0]:
+            if main_prediction.data[1] >= main_prediction.data[0]:
                 correct_count += 1
                 ans_seq.append(1)
             else:
                 ans_seq.append(0)
         else:
             # current example is negative
-            if main_prediction.data[0][1] <= main_prediction.data[0][0]:
+            if main_prediction.data[1] <= main_prediction.data[0]:
                 correct_count += 1
                 ans_seq.append(1)
             else:
@@ -434,26 +442,33 @@ def train_test_by_issue(args, data_collection):
         data_here = data_collection[issue]
         tr_data, val_data, test_data = data_here["train"], data_here["val"], data_here["test"]
 
+        print("Loading the full model...")
+        logging.disable(logging.CRITICAL)
         # initialize model
         current_model = DebateModel(args.num_task,args.model)
 
         current_model.to(device)
         optimizer = torch.optim.SGD(current_model.parameters(), lr=args.lr)
         loss_func = torch.nn.CrossEntropyLoss()
+        logging.disable(logging.NOTSET)
 
-        
         best_dev_performance = 0
         for i in range(args.epochs):
-            train(current_model, tr_data, args) # save a few checkpoints and pick the best
-            type_acc, _ = test(current_model, val_data, args)
-            if type_acc >= best_dev_performance:
-                best_dev_performance = test_performance
+            print("========================= epoch " + str(i) + " ==========================")
+            train(current_model, tr_data, args, loss_func, optimizer) # save a few checkpoints and pick the best
+            type_acc, _ = test(current_model, val_data, args, loss_func, optimizer)
+            print(" Dev Acc: ")
+            if type_acc > best_dev_performance:
+                print("New Best Acc!!!" + str(type_acc))
+                best_dev_performance = type_acc
                 torch.save(current_model.state_dict(), './best_models/' + args.model + '.pth')
 
-        best_model = current_model.load_state_dict(torch.load('./best_models/' + args.model + '.pth'))
+        current_model.load_state_dict(torch.load('./best_models/' + args.model + '.pth'))
+        type_acc, type_ans_seq = test(current_model, val_data, args, loss_func, optimizer)
 
-        type_acc, type_ans_seq = test(best_model, val_data, args)
-        print("Accurracy for " + issue + ": " + str(type_acc))
+        print("Test Accurracy for " + issue + ": " + str(type_acc))
+        print()
+        print()
         all_count[issue].extend(type_ans_seq)
         all_count['overall'].extend(type_ans_seq)
 
@@ -479,7 +494,7 @@ parser.add_argument("--model", default='bert-large-uncased', type=str, required=
                     help="choose the model to test")
 parser.add_argument("--lr", default=0.0001, type=float, required=False,
                     help="initial learning rate")
-parser.add_argument("--epochs", default=30, type=int, required=False,
+parser.add_argument("--epochs", default=5, type=int, required=False,
                     help="number of training epochs")
 parser.add_argument("--lrdecay", default=0.8, type=float, required=False,
                     help="learning rate decay every 5 epochs")
@@ -493,6 +508,8 @@ parser.add_argument("--max_len", default=128, type=int, required=False,
                     help="number of words")
 parser.add_argument("--baseline", default="full", type=str, required=False,
                     help="the baseline to test")
+parser.add_argument("--max_sent_num", default=5, type=int, required=False,
+                    help="max number of sentences to process")
 
 
 args = parser.parse_args()
