@@ -5,9 +5,9 @@ Put the data users.json, debates.json under a data directory.
 
 First we generate the pretrained embeddings by running...
 
-python big_issue_embedding.py
-python user_aspect_embedding.py
+  python big_issue_embedding.py
+  python user_aspect_embedding.py
 
 Then we start the training and evaluating by running...
 
-python debate.py
+  python debate.py
