@@ -34,16 +34,17 @@ arglex = Classifier()
 # big issues 
 BIG_ISSUES = ['Abortion', 'Affirmative Action', 'Animal Rights', 'Barack Obama', 'Border Fence', 'Capitalism', 'Civil Unions', 'Death Penalty', 'Drug Legalization', 'Electoral College', 'Environmental Protection', 'Estate Tax', 'European Union', 'Euthanasia', 'Federal Reserve', 'Flat Tax', 'Free Trade', 'Gay Marriage', 'Global Warming Exists', 'Globalization', 'Gold Standard', 'Gun Rights', 'Homeschooling', 'Internet Censorship', 'Iran-Iraq War', 'Labor Union', 'Legalized Prostitution', 'Medicaid & Medicare', 'Medical Marijuana', 'Military Intervention', 'Minimum Wage', 'National Health Care', 'National Retail Sales Tax', 'Occupy Movement', 'Progressive Tax', 'Racial Profiling', 'Redistribution', 'Smoking Ban', 'Social Programs', 'Social Security', 'Socialism', 'Stimulus Spending', 'Term Limits', 'Torture', 'United Nations', 'War in Afghanistan', 'War on Terror', 'Welfare']
 USEFUL_CATS = ['political_ideology', 'education', 'ethnicity', 'interested', 'gender' , 'religious_ideology']
-TAGERT_LABEL = ["Pro","Con"]
+TARGET_LABEL = ["Pro","Con"]
 
 def linguistic_feature_generator(sent_list, feature_set=["len","sub-polar","arglex"]):
     
     linguistic_vec = []
     for sent in sent_list:
-        if sent[-1] != ".":
-            sent.append(".")
+        if sent[-1] in "abcdefghijklmnopqrstuvwxyz":
+            sent += "."
 
-    text = sent_list.join(" ")
+    sep = " "
+    text = sep.join(sent_list)
 
     avg_length = 0
     avg_sub = 0
@@ -75,12 +76,12 @@ def linguistic_feature_generator(sent_list, feature_set=["len","sub-polar","argl
     lex_vec = [lexicon_score[1], lexicon_score[3], lexicon_score[4], lexicon_score[5], lexicon_score[11]]
     
     if "len" in feature_set:
-        linguisitc_vec.append(avg_length)
+        linguistic_vec.append(avg_length)
     if "sub-polar" in feature_set:
-        linguisitc_vec.append(average_sub)
-        linguisitc_vec.append(average_polar)
+        linguistic_vec.append(average_sub)
+        linguistic_vec.append(average_polar)
     if "arglex" in feature_set:
-        linguisitc_vec.extend(lex_vec)
+        linguistic_vec.extend(lex_vec)
 
     return linguistic_vec
 
@@ -121,15 +122,15 @@ class LSTMEncoder(torch.nn.Module):
 
 class DebateModel(torch.nn.Module):
 
-    def __init__(self, config):
-        super(DebateModel, self).__init__(num_task,config)
+    def __init__(self, num_task, config):
+        super(DebateModel, self).__init__()
         
         self.num_task = num_task
-        self.bert = BertEncoder(config)
+        self.bert = BertEncoder.from_pretrained(config)
         # self.lstm = LSTMEncoder(300,300)
 
         self.text_specific = torch.nn.Linear(768, 128)
-        self.ling_specific = torch.nn.Linear(5, 5)
+        self.ling_specific = torch.nn.Linear(8, 5)
         self.cat_specific = torch.nn.Linear(len(USEFUL_CATS) * 10, 64) # 6 * 10
         self.task_specific = torch.nn.Linear(10, 5)
 
@@ -139,11 +140,11 @@ class DebateModel(torch.nn.Module):
         self.dropout = torch.nn.Dropout(0.5)
         self.classification = torch.nn.Linear(128+64+5, self.hidden_dim) # remaining
         self.second_last_layer = torch.nn.Linear(self.hidden_dim,self.hidden_dim)
-        self.last_layers = init_per_task_last_layers(self.num_task)
+        self.last_layers = self.init_per_task_last_layers(self.num_task)
     
-    def init_per_task_last_layers(num_task):
+    def init_per_task_last_layers(self, num_task):
         # we only cares about Pro/Con here
-        [torch.nn.Linear(self.hidden_dim + 5, len(TAGERT_LABEL)) for i in range(num_task)]
+        [torch.nn.Linear(self.hidden_dim + 5, len(TARGET_LABEL)) for i in range(num_task)]
 
     def init_hidden(self):
         return (torch.zeros(1, 1, self.hidden_dim),
@@ -182,12 +183,19 @@ class DataLoader:
 
         self.tokenizer = BertTokenizer.from_pretrained(args.model)
         # self.word_embeddings = self.load_embedding_dict('glove.txt')
-        _, self.big_issues, self.issue_sim_dic, self.issue_emb_dic = big_issue_embedding()
-        _, _, self.att_emb_dic = user_attritbute_embedding()
+
+        # Calculate as loading
+        # _, self.big_issues, self.issue_sim_dic, self.issue_emb_dic = big_issue_embedding()
+        # _, _, self.att_emb_dic = user_attritbute_embedding()
+
+        # Load pretrained
+        self.issue_emb_dic, self.issue_sim_dic, self.att_emb_dic = self.load_pretrained_embedding_dict()
+
         print("Successfully load all the embeddings")
 
-        self.data_by_issue = tensorize_examples(self, self.users)
-        self.data_collection =  seperate_tr_val_test(self.data_by_issue, portions=[0.7,0.85,1])
+        print("Start processing the data.")
+        self.data_by_issue = self.tensorize_examples(self.users)
+        self.data_collection =  self.seperate_tr_val_test(self.data_by_issue)
         print("Successfully processed the data.")
 
     def initial_loading(self, data_path):
@@ -195,6 +203,19 @@ class DataLoader:
             users = json.load(f)
 
         return users
+
+    def load_pretrained_embedding_dict(self):
+
+        with open("big_issue_embedding.json","r",encoding="UTF-8") as f:
+            issue_emb_dic = json.load(f)
+
+        with open("issue_similarity.json","r",encoding="UTF-8") as f:
+            issue_sim_dic = json.load(f)
+
+        with open("user_attritbute_embedding.json","r",encoding="UTF-8") as f:
+            att_emb_dic = json.load(f)
+
+        return issue_emb_dic, issue_sim_dic, att_emb_dic
 
     def load_embedding_dict(self, path):
         print("Loading word embeddings from {}...".format(path))
@@ -217,20 +238,20 @@ class DataLoader:
     def tensorize_examples(self, users):
         data_by_issue = dict()
 
-        for issue in tqdm(self.big_issues):
+        for issue in BIG_ISSUES:
             data_by_issue[issue] = dict()
             # get the auxiliary issues, [issue,similarity]
-            data_by_issue[issue]["aux_issues"] = self.issue_sim_dic[self.args.num_task-1]
+            data_by_issue[issue]["aux_issues"] = self.issue_sim_dic[issue][:(self.args.num_task-1)]
             data_by_issue[issue]["users"] = []
 
-        for user in users:
+        for user in tqdm(users[:100]):
             tensorized_user = dict()
 
             # categorical attributes
             cat_one_hot = []
             cat_emb = []
             for cat in USEFUL_CATS:
-                cat_emb.extend(self.att_emb_dic[user[cat]])
+                cat_emb.extend(self.att_emb_dic[cat + ":" +user[cat]])
 
                 cat_id = user[cat+"_id"]
                 cat_num = user[cat+"_len"]
@@ -250,14 +271,14 @@ class DataLoader:
             # tokenized sentences for BERT
             tokenized_sents = []
             for sent in text_sents:
-                token_sent = tokenizer.tokenize('[CLS] ' + sent)
-                if len(tokenized_sent) > (self.args.max_len-1):
+                token_sent = self.tokenizer.tokenize('[CLS] ' + sent)
+                if len(token_sent) > (self.args.max_len-1):
                     token_sent = token_sent[:self.args.max_len-1]
                 # elif len(tokenized_sent) < (self.args.max_len-1):
                 #     while len(tokenized_sent) < (self.args.max_len-1):
                 #         tokenized_sent.append(0)
                 token_sent.append(" [SEP]")
-                tokenized_sent = tokenizer.convert_tokens_to_ids(token_sent)
+                tokenized_sent = self.tokenizer.convert_tokens_to_ids(token_sent)
                 
                 while len(tokenized_sent) < (self.args.max_len):
                     tokenized_sent.append(0)
@@ -268,7 +289,7 @@ class DataLoader:
             for issue in BIG_ISSUES:
                 # If anyone in main or the auxiliary issues has a label out of the desired ones
                 out_of_scope = 0
-                auxes = self.issue_sim_dic[issue][:self.args.num_task]
+                auxes = self.issue_sim_dic[issue][:(self.args.num_task-1)]
 
                 if user["big_issues_dict"][issue] not in TARGET_LABEL:
                     out_of_scope = 1
@@ -295,31 +316,39 @@ class DataLoader:
                     sim_seq.append(issue_sim[1])
                 # name of the main issue
                 data_by_issue[target[0][0]]["users"].append(
-                {'cat_one_hot':torch.tensor(cat_one_hot).to(device),
-                    'cat_emb': torch.tensor(cat_emb).to(device),
-                    'ling_vec':torch.tensor(linguistic_vector).to(device),
-                    'tokenized_sents': torch.tensor(bert_tokenized_sent2).to(device),
-                    'label_seq': torch.tensor(label_seq).to(device),
-                    'task_embs': torch.tensor(task_embs).to(device),
-                    'sim_seq': torch.tensor(sim_seq).to(device)
+                {'cat_one_hot':torch.tensor(cat_one_hot),
+                    'cat_emb': torch.tensor(cat_emb),
+                    'ling_vec':torch.tensor(linguistic_vector),
+                    'tokenized_sents': torch.tensor(tokenized_sents),
+                    'label_seq': torch.tensor(label_seq),
+                    'task_embs': torch.tensor(task_embs),
+                    'sim_seq': torch.tensor(sim_seq)
                     })
 
         return data_by_issue
 
-    def seperate_tr_val_test(data_by_issue, portions=[0.7,0.85,1]):
+    def seperate_tr_val_test(self, data_by_issue):
         seperated_data_collection = dict()
         count = 0
+        portions=[0.7,0.85,1]
 
         for issue in BIG_ISSUES:
-            collected_users = data_by_issue[issue]
+            collected_users = data_by_issue[issue]["users"]
             random.seed(self.args.seed)
-            random.shuffle(collected_users)
+            # random.shuffle(collected_users)
+            tr_data = [] 
+            val_data = []
+            test_data = []
 
             count +=  len(collected_users)
 
-            tr_data = collected_users[:int(portions[0]*len(collected_users))]
-            val_data = collected_users[int(portions[0]*len(collected_users)):int(portions[1]*len(collected_users))]
-            test_data = collected_users[int(portions[1]*len(collected_users)):]
+            for i, user in enumerate(collected_users):
+                if i < int(portions[0]*len(collected_users)):
+                    tr_data.append(user)
+                elif i >= int(portions[0]*len(collected_users)) and i < int(portions[1]*len(collected_users)):
+                    val_data.append(user)
+                else:
+                    test_data.append(user)
 
             seperated_data_collection[issue] = dict()
             seperated_data_collection[issue]["train"] = tr_data
@@ -348,7 +377,8 @@ def train(model, data, args):
         #     })
 
     for tmp in tqdm(selected_data):
-        task_results = model(cat_vec=tmp['cat_emb'], ling_vec=tmp['ling_vec'], tokenized_sents=tmp['tokenized_sents'], task_embs=['task_embs'])
+        
+        task_results = model(cat_vec=tmp['cat_emb'].to(device), ling_vec=tmp['ling_vec'].to(device), tokenized_sents=tmp['tokenized_sents'].to(device), task_embs=tmp['task_embs'].to(device))
         for i, task_prediction in enumerate(task_results):
             # here we assigned the weighted sum
             if i == 0: # main task: 1 * loss
@@ -367,11 +397,11 @@ def test(model, data, args):
     ans_seq = []
     # print('Testing:')
     model.eval()
-    for tmp_example in tqdm(data):
-        task_results = model(cat_vec=tmp['cat_emb'], ling_vec=tmp['ling_vec'], tokenized_sents=tmp['tokenized_sents'], task_embs=['task_embs'])
+    for tmp in tqdm(data):
+        task_results = model(cat_vec=tmp['cat_emb'].to(device), ling_vec=tmp['ling_vec'].to(device), tokenized_sents=tmp['tokenized_sents'].to(device), task_embs=tmp['task_embs'].to(device))
         main_prediction =  task_results[0]
 
-        if tmp_example['label_seq'][0].data[0] == 1:
+        if tmp['label_seq'][0].data[0] == 1:
             # current example is positive
             if main_prediction.data[0][1] >= main_prediction.data[0][0]:
                 correct_count += 1
@@ -394,22 +424,24 @@ def train_test_by_issue(args, data_collection):
     all_count = dict()
     # correct_count['overall'] = []
     all_count['overall'] = []
+    print("Start training...")
 
     for i, issue in enumerate(BIG_ISSUES):
-        print("We are working on the " + str(i)+ " Issue: " + issue)
+        print("We are working on the Issue "+ str(i)+": " + issue)
 
-        correct_count[issue] = []
+        # correct_count[issue] = []
         all_count[issue] = []
         data_here = data_collection[issue]
         tr_data, val_data, test_data = data_here["train"], data_here["val"], data_here["test"]
 
         # initialize model
+        current_model = DebateModel(args.num_task,args.model)
+
         current_model.to(device)
         optimizer = torch.optim.SGD(current_model.parameters(), lr=args.lr)
         loss_func = torch.nn.CrossEntropyLoss()
 
-        current_model = DebateModel(args.num_task,args.model)
-
+        
         best_dev_performance = 0
         for i in range(args.epochs):
             train(current_model, tr_data, args) # save a few checkpoints and pick the best
@@ -475,8 +507,15 @@ print('number of gpu:', n_gpu)
 torch.cuda.get_device_name(0)
 
 # set your data path here
-data_class = DataLoader('./text_debate_users.json', args)
-# accuracy_by_type = train_test_by_issue(args, data_class.data_collection)
+# data_class = DataLoader('./text_debate_users.json', args)
+# torch.save(data_class, './data_file.pt') 
+
+# print("Loading Cached Weights...")
+data_class = torch.load('./data_file.pt')
+
+# testing
+# args.epochs = 2 
+accuracy_by_type = train_test_by_issue(args, data_class.data_collection)
 
 # IO
 print("With " + str(args.num_task) + ", the overall accuracy is: " + str(accuracy_by_type["overall"]))

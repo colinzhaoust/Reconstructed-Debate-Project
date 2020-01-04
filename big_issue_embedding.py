@@ -70,7 +70,7 @@ def big_issue_embedding():
     
     for word in words:
         issue_sim_dic[word] = model.wv.most_similar_cosmul(positive=[word], topn=len(words)-1)
-        embedding_dic[word] = model[word]
+        embedding_dic[word] = model[word].tolist()
 
 
     return model, words, issue_sim_dic, embedding_dic
@@ -78,6 +78,12 @@ def big_issue_embedding():
 if __name__ == "__main__":
     model, words, issue_sim_dic, embedding_dic = big_issue_embedding()
     print(issue_sim_dic)
+
+    with open("big_issue_embedding.json","w",encoding="UTF-8") as f:
+        json.dump(embedding_dic, f)
+        
+    with open("issue_similarity.json","w",encoding="UTF-8") as f:
+        json.dump(issue_sim_dic, f)
 
 # from sklearn.decomposition import PCA
 # from matplotlib import pyplot

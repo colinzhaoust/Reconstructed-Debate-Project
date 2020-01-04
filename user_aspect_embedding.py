@@ -28,7 +28,7 @@ def sent_shuffle(sent):
     all_sents = []
     # total_length = len(sent)
 
-    for i in range(10):
+    for i in range(5):
         random.shuffle(sent)
         all_sents.append(sent[:])
 
@@ -48,10 +48,10 @@ def user_attritbute_embedding(useful_aspects= ['political_ideology', 'education'
 
         for aspect in useful_aspects:
 
-            if user[aspect] == "Not Saying":
-                continue
-            else:
-                user_sent.append(aspect + ":" + user[aspect])
+            # if user[aspect] == "Not Saying":
+            #     continue
+            # else:
+            user_sent.append(aspect + ":" + user[aspect])
 
         for key in user["big_issues_dict"].keys():
 
@@ -75,7 +75,7 @@ def user_attritbute_embedding(useful_aspects= ['political_ideology', 'education'
     embedding_dic = dict()
     
     for word in words:
-        embedding_dic[word] = model[word]
+        embedding_dic[word] = model[word].tolist()
 
     # words are key-choice
     return model, words, embedding_dic
@@ -83,6 +83,9 @@ def user_attritbute_embedding(useful_aspects= ['political_ideology', 'education'
 
 if __name__ == "__main__":
     model, words, embedding_dic = user_attritbute_embedding()
+
+    with open("user_attritbute_embedding.json","w",encoding="UTF-8") as f:
+        json.dump(embedding_dic, f)
 # for word in words:
 #     print(word)
 # print(model.wv.most_similar_cosmul(positive=['political_ideology:Conservative'], topn=30))

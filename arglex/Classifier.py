@@ -75,6 +75,8 @@ class Classifier:
 
     #normalize all categories count by percentage
     ngrams = sum(i for i in result)
+    if ngrams == 0:
+      ngrams = 1
     result = list(map((lambda x: round(float(x)/ngrams,5)), result))
 
 
