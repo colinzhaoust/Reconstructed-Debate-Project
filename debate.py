@@ -22,7 +22,7 @@ from sklearn.utils import shuffle
 from nltk.tokenize import sent_tokenize
 from nltk.tokenize import word_tokenize
 from textblob import TextBlob
-from arglex-master.arglex. import Classifier
+from arglex.Classifier import Classifier
 
 # load pretrained embedding
 from big_issue_embedding import big_issue_embedding
@@ -34,7 +34,7 @@ arglex = Classifier()
 # big issues 
 BIG_ISSUES = ['Abortion', 'Affirmative Action', 'Animal Rights', 'Barack Obama', 'Border Fence', 'Capitalism', 'Civil Unions', 'Death Penalty', 'Drug Legalization', 'Electoral College', 'Environmental Protection', 'Estate Tax', 'European Union', 'Euthanasia', 'Federal Reserve', 'Flat Tax', 'Free Trade', 'Gay Marriage', 'Global Warming Exists', 'Globalization', 'Gold Standard', 'Gun Rights', 'Homeschooling', 'Internet Censorship', 'Iran-Iraq War', 'Labor Union', 'Legalized Prostitution', 'Medicaid & Medicare', 'Medical Marijuana', 'Military Intervention', 'Minimum Wage', 'National Health Care', 'National Retail Sales Tax', 'Occupy Movement', 'Progressive Tax', 'Racial Profiling', 'Redistribution', 'Smoking Ban', 'Social Programs', 'Social Security', 'Socialism', 'Stimulus Spending', 'Term Limits', 'Torture', 'United Nations', 'War in Afghanistan', 'War on Terror', 'Welfare']
 USEFUL_CATS = ['political_ideology', 'education', 'ethnicity', 'interested', 'gender' , 'religious_ideology']
-TAGERT_LABEL = ["Pro"，"Con"]
+TAGERT_LABEL = ["Pro","Con"]
 
 def linguistic_feature_generator(sent_list, feature_set=["len","sub-polar","arglex"]):
     
@@ -67,9 +67,11 @@ def linguistic_feature_generator(sent_list, feature_set=["len","sub-polar","argl
 
     # arg
     lexicon_score = arglex.analyse(text)
+    # in the original arglex, we have
     # ['0-Assessments', '1-Authority', '2-Causation', '3-Conditionals', '4-Contrast', '5-Difficulty', '6-Doubt', '7-Emphasis',\
     #     '8-Generalization', '9-Inconsistency', '10-Inyourshoes', '11-Necessity', '12-Possibility', '13-Priority', '14-Rhetoricalquestion',\
     #    '15-Structure', '16-Wants']
+    # Here we only care about Authority, Conditionals, Contrast, Difficulty, Necessity
     lex_vec = [lexicon_score[1], lexicon_score[3], lexicon_score[4], lexicon_score[5], lexicon_score[11]]
     
     if "len" in feature_set:
@@ -136,7 +138,7 @@ class DebateModel(torch.nn.Module):
 
         self.dropout = torch.nn.Dropout(0.5)
         self.classification = torch.nn.Linear(128+64+5, self.hidden_dim) # remaining
-        self.second_last_layer = torch.nn.Linear(self.hidden_dim,self.hidden_dim = 200)
+        self.second_last_layer = torch.nn.Linear(self.hidden_dim,self.hidden_dim)
         self.last_layers = init_per_task_last_layers(self.num_task)
     
     def init_per_task_last_layers(num_task):
@@ -286,11 +288,11 @@ class DataLoader:
                 label_seq = []
                 task_embs = []
                 sim_seq = []
-                for issue-sim in target:
+                for issue_sim in target:
                     # TARGET_LABEL = [Pro, Con]
-                    label_seq.append(TARGET_LABEL.index(user["big_issues_dict"][issue-sim[0]]))
-                    task_embs.append(self.issue_emb_dic[issue-sim[0]])
-                    sim_seq.append(issue-sim[1])
+                    label_seq.append(TARGET_LABEL.index(user["big_issues_dict"][issue_sim[0]]))
+                    task_embs.append(self.issue_emb_dic[issue_sim[0]])
+                    sim_seq.append(issue_sim[1])
                 # name of the main issue
                 data_by_issue[target[0][0]]["users"].append(
                 {'cat_one_hot':torch.tensor(cat_one_hot).to(device),
@@ -393,7 +395,9 @@ def train_test_by_issue(args, data_collection):
     # correct_count['overall'] = []
     all_count['overall'] = []
 
-    for issue in BIG_ISSUES:
+    for i, issue in enumerate(BIG_ISSUES):
+        print("We are working on the " + str(i)+ " Issue: " + issue)
+
         correct_count[issue] = []
         all_count[issue] = []
         data_here = data_collection[issue]
@@ -412,9 +416,9 @@ def train_test_by_issue(args, data_collection):
             type_acc, _ = test(current_model, val_data, args)
             if type_acc >= best_dev_performance:
                 best_dev_performance = test_performance
-                torch.save(current_model.state_dict(), 'best_models/' + args.model + '.pth')
+                torch.save(current_model.state_dict(), './best_models/' + args.model + '.pth')
 
-        best_model = current_model.load_state_dict(torch.load('best_models/' + args.model + '.pth'))
+        best_model = current_model.load_state_dict(torch.load('./best_models/' + args.model + '.pth'))
 
         type_acc, type_ans_seq = test(best_model, val_data, args)
         print("Accurracy for " + issue + ": " + str(type_acc))
@@ -472,7 +476,7 @@ torch.cuda.get_device_name(0)
 
 # set your data path here
 data_class = DataLoader('./text_debate_users.json', args)
-accuracy_by_type = train_test_by_issue(args, data_class.data_collection)
+# accuracy_by_type = train_test_by_issue(args, data_class.data_collection)
 
 # IO
 print("With " + str(args.num_task) + ", the overall accuracy is: " + str(accuracy_by_type["overall"]))
