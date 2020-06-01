@@ -1,5 +1,7 @@
 # reconstructed-debate-project
-Here we reconstruct the debate project with a better structure, more modules, and baselines. 
+Here is the debate project with the more modules, and baselines. 
+
+dependencies:genism, numpy, spacy, nltk, pandas, pytorch=1.1, python=3.6
 
 Put the data users.json, debates.json under a ./data directory.
 
